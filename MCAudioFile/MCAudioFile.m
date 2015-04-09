@@ -239,13 +239,23 @@ static const UInt32 packetPerRead = 15;
     UInt32 ioNumBytes = ioNumPackets * _maxPacketSize;
     void * outBuffer = (void *)malloc(ioNumBytes);
     
-    UInt32 descSize = sizeof(AudioStreamPacketDescription) * ioNumPackets;
-    AudioStreamPacketDescription * outPacketDescriptions = (AudioStreamPacketDescription *)malloc(descSize);
+    AudioStreamPacketDescription * outPacketDescriptions = NULL;
+    OSStatus status = noErr;
+    if (_format.mFormatID != kAudioFormatLinearPCM)
+    {
+        UInt32 descSize = sizeof(AudioStreamPacketDescription) * ioNumPackets;
+        outPacketDescriptions = (AudioStreamPacketDescription *)malloc(descSize);
+        status = AudioFileReadPacketData(_audioFileID, false, &ioNumBytes, outPacketDescriptions, _packetOffset, &ioNumPackets, outBuffer);
+    }
+    else
+    {
+        status = AudioFileReadPackets(_audioFileID, false, &ioNumBytes, outPacketDescriptions, _packetOffset, &ioNumPackets, outBuffer);
+    }
     
-    OSStatus status = AudioFileReadPacketData(_audioFileID, false, &ioNumBytes, outPacketDescriptions, _packetOffset, &ioNumPackets, outBuffer);
     if (status != noErr)
     {
         *isEof = status == kAudioFileEndOfFileError;
+        free(outBuffer);
         return nil;
     }
     
@@ -261,10 +271,23 @@ static const UInt32 packetPerRead = 15;
         NSMutableArray *parsedDataArray = [[NSMutableArray alloc] init];
         for (int i = 0; i < ioNumPackets; ++i)
         {
-            AudioStreamPacketDescription packetDescriptioin = outPacketDescriptions[i];
-            MCParsedAudioData *parsedData = [MCParsedAudioData parsedAudioDataWithBytes:outBuffer + packetDescriptioin.mStartOffset
-                                                                      packetDescription:packetDescriptioin];
-            [parsedDataArray addObject:parsedData];
+            AudioStreamPacketDescription packetDescription;
+            if (outPacketDescriptions)
+            {
+                packetDescription = outPacketDescriptions[i];
+            }
+            else
+            {
+                packetDescription.mStartOffset = i * _format.mBytesPerPacket;
+                packetDescription.mDataByteSize = _format.mBytesPerPacket;
+                packetDescription.mVariableFramesInPacket = _format.mFramesPerPacket;
+            }
+            MCParsedAudioData *parsedData = [MCParsedAudioData parsedAudioDataWithBytes:outBuffer + packetDescription.mStartOffset
+                                                                      packetDescription:packetDescription];
+            if (parsedData)
+            {
+                [parsedDataArray addObject:parsedData];
+            }
         }
         return parsedDataArray;
     }
@@ -309,7 +332,7 @@ static OSStatus MCAudioFileReadCallBack(void *inClientData,
                                         void *buffer,
                                         UInt32 *actualCount)
 {
-    __unsafe_unretained MCAudioFile *audioFile = (__bridge MCAudioFile *)inClientData;
+    MCAudioFile *audioFile = (__bridge MCAudioFile *)inClientData;
     
     *actualCount = [audioFile availableDataLengthAtOffset:inPosition maxLength:requestCount];
     if (*actualCount > 0)
@@ -323,7 +346,7 @@ static OSStatus MCAudioFileReadCallBack(void *inClientData,
 
 static SInt64 MCAudioFileGetSizeCallBack(void *inClientData)
 {
-    __unsafe_unretained MCAudioFile *audioFile = (__bridge MCAudioFile *)inClientData;
+    MCAudioFile *audioFile = (__bridge MCAudioFile *)inClientData;
     return audioFile.fileSize;
 }
 
